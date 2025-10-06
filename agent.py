@@ -24,7 +24,7 @@ agent_id = str(uuid.uuid4())
 @sio.event
 def connect():
     print(f"Connected to server: {SERVER_URL}")
-    available_browsers = ["chromium", "firefox", "webkit"]  # Playwright defaults
+    available_browsers = ["chromium", "firefox", "webkit"]
     sio.emit('agent_register', {
         'agent_id': agent_id,
         'browsers': available_browsers
@@ -115,8 +115,6 @@ def main():
     print(f"Server URL: {SERVER_URL}")
     print(f"\nPress Ctrl+C to stop the agent\n")
 
-    asyncio.run(install_browsers())  # ensure browsers are installed
-
     while True:
         try:
             print("Connecting to server...")
@@ -136,15 +134,6 @@ def main():
             print("Retrying connection in 5 seconds...")
             import time
             time.sleep(5)
-
-
-async def install_browsers():
-    print("Installing Playwright browsers...")
-    async with async_playwright() as p:
-        await p.chromium.executable_path  # triggers download
-        await p.firefox.executable_path
-        await p.webkit.executable_path
-    print("Playwright browsers installed successfully.")
 
 
 if __name__ == '__main__':

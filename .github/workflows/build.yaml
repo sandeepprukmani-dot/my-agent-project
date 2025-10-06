@@ -82,11 +82,11 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install
 
-      - name: Build Windows executable
+      - name: Build macOS executable
         run: pyinstaller --onefile agent.py
 
-      - name: Upload Windows executable
+      - name: Upload macOS executable
         uses: actions/upload-artifact@v4
         with:
-          name: agent-windows
-          path: dist/agent.exe
+          name: agent-macos
+          path: dist/agent
