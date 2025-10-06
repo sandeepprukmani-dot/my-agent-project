@@ -11,8 +11,7 @@ jobs:
     name: Build Linux Executable
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -22,18 +21,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright>=1.40.0 python-socketio[client]>=5.10.0 pillow>=10.0.0 pyinstaller
+          pip install -r requirements.txt
 
       - name: Install Playwright browsers
-        run: |
-          playwright install
+        run: playwright install
 
       - name: Build Linux executable
-        run: |
-          pyinstaller --onefile agent.py
+        run: pyinstaller --onefile agent.py
 
       - name: Upload Linux executable
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: agent-linux
           path: dist/agent
@@ -42,8 +39,7 @@ jobs:
     name: Build Windows Executable
     runs-on: windows-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -53,18 +49,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright>=1.40.0 python-socketio[client]>=5.10.0 pillow>=10.0.0 pyinstaller
+          pip install -r requirements.txt
 
       - name: Install Playwright browsers
-        run: |
-          playwright install
+        run: playwright install
 
       - name: Build Windows executable
-        run: |
-          pyinstaller --onefile agent.py
+        run: pyinstaller --onefile agent.py
 
       - name: Upload Windows executable
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: agent-windows
           path: dist/agent.exe
@@ -73,8 +67,7 @@ jobs:
     name: Build macOS Executable
     runs-on: macos-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -84,18 +77,4 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright>=1.40.0 python-socketio[client]>=5.10.0 pillow>=10.0.0 pyinstaller
-
-      - name: Install Playwright browsers
-        run: |
-          playwright install
-
-      - name: Build macOS executable
-        run: |
-          pyinstaller --onefile agent.py
-
-      - name: Upload macOS executable
-        uses: actions/upload-artifact@v3
-        with:
-          name: agent-macos
-          path: dist/agent
+          pip install -r requirements.
