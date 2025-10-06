@@ -1,0 +1,4 @@
+playwright>=1.40.0
+python-socketio[client]>=5.10.0
+pillow>=10.0.0
+pyinstaller
