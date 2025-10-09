@@ -1,0 +1,252 @@
+import asyncio
+import sys
+import os
+import json
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from datetime import datetime
+
+
+class SelfHealingRunner:
+    def __init__(self):
+        self.locators_cache = {}
+        self.missing_locators = []
+        self.healing_in_progress = set()
+        self.healing_log = []
+        self.browser = None
+        self.page = None
+
+    async def heal_locator_action(self, original_selector, action_to_perform, method_name, args, kwargs):
+        locator_key = f"{original_selector}_{method_name}"
+
+        if locator_key in self.healing_in_progress:
+            raise Exception(f"Recursive healing failed for locator: {original_selector}")
+
+        try:
+            return await action_to_perform(*args, **kwargs)
+        except Exception as e:
+            print(f"❌ [Healing] Initial action '{method_name}' on '{original_selector}' failed.")
+            self.healing_in_progress.add(locator_key)
+            try:
+                self.missing_locators.append({
+                    'selector': original_selector,
+                    'method': method_name,
+                    'error': str(e),
+                    'timestamp': datetime.now().isoformat()
+                })
+
+                healed_selector = await self.inject_and_wait_for_healing(original_selector, method_name)
+
+                if healed_selector and healed_selector != 'SKIPPED':
+                    print(f"✅ [Healing] Found new selector: '{healed_selector}'")
+                    # Store the fix for later saving
+                    self.locators_cache[original_selector] = healed_selector
+
+                    # Get the new locator and immediately retry the action to continue the script
+                    healed_locator = self.page.locator(healed_selector)
+                    healed_action = getattr(healed_locator, method_name)
+                    print(f"🔄 [Action] Retrying '{method_name}' on new selector to continue script...")
+                    return await healed_action(*args, **kwargs)
+
+                elif healed_selector == 'SKIPPED':
+                    raise Exception(f"User skipped healing for: {original_selector}")
+                else:
+                    raise Exception(f"Could not heal locator: {original_selector}")
+            finally:
+                self.healing_in_progress.discard(locator_key)
+
+    async def inject_and_wait_for_healing(self, selector, action, timeout=60):
+        # This method's logic remains the same
+        try:
+            if self.page.is_closed():
+                raise Exception("Page is closed, cannot inject overlay")
+
+            overlay_js = """
+            ([selector, action]) => {
+                if (document.getElementById('locator-overlay')) return;
+                window.locator_found = null;
+
+                const overlay = document.createElement('div');
+                overlay.id = 'locator-overlay';
+                overlay.style.cssText = `
+                    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                    z-index: 999999; background: rgba(0,0,0,0.2);
+                    pointer-events: none;
+                `;
+
+                const message = document.createElement('div');
+                message.style.cssText = `
+                    position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+                    background: #fff; color: #333; padding: 20px; border-radius: 10px;
+                    box-shadow: 0 5px 15px rgba(0,0,0,0.3); max-width: 450px; text-align: center;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                    pointer-events: auto;
+                `;
+
+                const escapeHTML = str => {
+                    const p = document.createElement('p');
+                    p.textContent = str;
+                    return p.innerHTML;
+                };
+
+                message.innerHTML = `
+                    <h2 style="color: #d32f2f; margin-top:0;">🔧 Self-Healing Required</h2>
+                    <p><strong>Action:</strong> <strong style="color: #1976d2;">${escapeHTML(action)}</strong></p>
+                    <p><strong>Broken Selector:</strong></p>
+                    <code style="background: #eee; padding: 3px 6px; border-radius: 4px; display: block; white-space: pre-wrap; word-wrap: break-word;">${escapeHTML(selector)}</code>
+                    <p style="margin-top: 15px; font-weight: bold;">Please click the correct element on the page.</p>
+                    <div style="margin-top: 20px;">
+                        <button id="skip-healing" style="background: #ffa000; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer;">Skip</button>
+                    </div>
+                `;
+
+                overlay.appendChild(message);
+                document.body.appendChild(overlay);
+
+                function buildSelector(element) {
+                    if (!element) return '';
+                    if (element.id) return `#${CSS.escape(element.id)}`;
+                    if (element.getAttribute('data-testid')) return `[data-testid="${CSS.escape(element.getAttribute('data-testid'))}"]`;
+                    if (element.getAttribute('name')) return `${element.tagName.toLowerCase()}[name="${CSS.escape(element.getAttribute('name'))}"]`;
+                    if (element.innerText) return `xpath=//${element.tagName.toLowerCase()}[.='${element.innerText}']`;
+                    return element.tagName.toLowerCase();
+                }
+
+                function cleanup() {
+                    overlay.remove();
+                    document.removeEventListener('click', handleClick, true);
+                }
+
+                function handleClick(e) {
+                    if (e.target.closest('#locator-overlay > div')) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const selector = buildSelector(e.target);
+                    if (selector) {
+                        window.locator_found = selector;
+                        cleanup();
+                    }
+                }
+
+                document.getElementById('skip-healing').addEventListener('click', () => {
+                    window.locator_found = 'SKIPPED';
+                    cleanup();
+                });
+                document.addEventListener('click', handleClick, true);
+            }
+            """
+            await self.page.evaluate(overlay_js, [selector, action])
+            await self.page.wait_for_function("() => window.locator_found !== null", timeout=timeout * 1000)
+            return await self.page.evaluate("() => window.locator_found");
+        except PlaywrightTimeout:
+            print(f"⌛ [Healing] Timeout waiting for user input after {timeout} seconds")
+            await self.page.evaluate("() => document.getElementById('locator-overlay')?.remove()")
+            return None
+        except Exception as e:
+            print(f"🔥 [Healing] Error during healing process: {e}")
+            return None
+
+    def monkey_patch_page(self, page):
+        # This method's logic remains the same
+        original_locator_method = page.locator
+
+        def patched_locator(selector, *args, **kwargs):
+            locator = original_locator_method(selector, *args, **kwargs)
+
+            def create_wrapper(method_name):
+                original_action = getattr(locator, method_name)
+
+                async def healing_wrapper(*a, **kw):
+                    return await self.heal_locator_action(
+                        original_selector=selector,
+                        action_to_perform=original_action,
+                        method_name=method_name,
+                        args=a,
+                        kwargs=kw
+                    )
+
+                return healing_wrapper
+
+            methods_to_patch = ['click', 'fill', 'press', 'type', 'check', 'uncheck', 'set_checked', 'hover', 'focus',
+                                'dblclick']
+            for method_name in methods_to_patch:
+                if hasattr(locator, method_name):
+                    setattr(locator, method_name, create_wrapper(method_name))
+            return locator
+
+        page.locator = patched_locator
+
+    def save_healing_report(self, script_path):
+        # This method's logic remains the same
+        report = {
+            'timestamp': datetime.now().isoformat(),
+            'script': script_path,
+            'healed_locators': self.locators_cache,
+            'missing_locators': self.missing_locators
+        }
+        report_path = f"{os.path.splitext(script_path)[0]}_healing_report.json"
+        with open(report_path, 'w', encoding='utf-8') as f:
+            json.dump(report, f, indent=2)
+        print(f"📊 Healing report saved to: {report_path}")
+
+    async def run_script(self, script_path):
+        """
+        Modified to run the script only once, collect all fixes,
+        and save the healed file at the end.
+        """
+        print(f"--- 🚀 Starting single execution run for {script_path} ---")
+
+        with open(script_path, "r", encoding="utf-8") as f:
+            source = f.read()
+
+        namespace = {"__name__": "__main__"}
+        exec(source, namespace)
+        if "run" not in namespace or not asyncio.iscoroutinefunction(namespace["run"]):
+            raise Exception("Script must define an async function `run()`.")
+
+        async with async_playwright() as pw:
+            self.browser = await pw.chromium.launch(headless=False)
+            self.page = await self.browser.new_page()
+            self.monkey_patch_page(self.page)
+            namespace["page"] = self.page
+
+            try:
+                await namespace["run"]()
+                print("\n✅ Script execution completed.")
+            except Exception as e:
+                print(f"\n🔥 Script execution failed: {e}")
+            finally:
+                await self.browser.close()
+
+        # Save the healed file once at the end if any locators were healed
+        if self.locators_cache:
+            healed_path = f"{os.path.splitext(script_path)[0]}_healed.py"
+            new_source = source
+            print("\n--- ✍️ Applying all collected heals ---")
+            for old_selector, new_selector in self.locators_cache.items():
+                print(f"Replacing '{old_selector}' with '{new_selector}'")
+                new_source = new_source.replace(f'"{old_selector}"', f'"{new_selector}"')
+                new_source = new_source.replace(f"'{old_selector}'", f"'{new_selector}'")
+
+            with open(healed_path, "w", encoding="utf-8") as f:
+                f.write(new_source)
+            print(f"\n💾 Healed script saved as: {healed_path}")
+        else:
+            print("\n--- No locators were healed in this run ---")
+
+        self.save_healing_report(script_path)
+
+
+async def main():
+    if len(sys.argv) != 2:
+        print("Usage: python self_healing_runner.py <path_to_your_test_script.py>")
+        sys.exit(1)
+    runner = SelfHealingRunner()
+    try:
+        await runner.run_script(sys.argv[1])
+    except Exception as e:
+        print(f"\n--- 🛑 RUNNER HALTED DUE TO AN UNRECOVERABLE ERROR ---\nError: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
